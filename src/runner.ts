@@ -11,7 +11,7 @@ export const runRules = (
   rules: RunRuleCollection,
   functions: FunctionCollection,
 ): IRuleResult[] => {
-  let results: IRuleResult[] = [];
+  const results: IRuleResult[] = [];
 
   for (const name in rules) {
     if (!rules.hasOwnProperty(name)) continue;
@@ -24,7 +24,7 @@ export const runRules = (
     }
 
     try {
-      results = results.concat(runRule(resolved, rule, functions));
+      results.push(...runRule(resolved, rule, functions));
     } catch (e) {
       console.error(`Unable to run rule '${name}':\n${e}`);
     }
@@ -33,11 +33,33 @@ export const runRules = (
   return results;
 };
 
+const execute = (
+  node: IGivenNode,
+  results: IRuleResult[],
+  resolved: Resolved,
+  rule: IRunRule,
+  functions: FunctionCollection,
+) => {
+  try {
+    const thens = Array.isArray(rule.then) ? rule.then : [rule.then];
+    for (const then of thens) {
+      const func = functions[then.function];
+      if (!func) {
+        console.warn(`Function ${then.function} not found. Called by rule ${rule.name}.`);
+        continue;
+      }
+
+      results.push(...lintNode(node, rule, then, func, resolved));
+    }
+  } catch (e) {
+    console.warn(`Encountered error when running rule '${rule.name}' on node at path '${node.path}':\n${e}`);
+  }
+};
+
 const runRule = (resolved: Resolved, rule: IRunRule, functions: FunctionCollection): IRuleResult[] => {
   const { result: target } = resolved;
 
-  let results: IRuleResult[] = [];
-  const nodes: IGivenNode[] = [];
+  const results: IRuleResult[] = [];
 
   // don't have to spend time running jsonpath if given is $ - can just use the root object
   if (rule.given && rule.given !== '$') {
@@ -47,37 +69,32 @@ const runRule = (resolved: Resolved, rule: IRunRule, functions: FunctionCollecti
         json: target,
         resultType: 'all',
         callback: (result: any) => {
-          nodes.push({
-            path: JSONPath.toPathArray(result.path),
-            value: result.value,
-          });
+          execute(
+            {
+              path: JSONPath.toPathArray(result.path),
+              value: result.value,
+            },
+            results,
+            resolved,
+            rule,
+            functions,
+          );
         },
       });
     } catch (e) {
       console.error(e);
     }
   } else {
-    nodes.push({
-      path: ['$'],
-      value: target,
-    });
-  }
-
-  for (const node of nodes) {
-    try {
-      const thens = Array.isArray(rule.then) ? rule.then : [rule.then];
-      for (const then of thens) {
-        const func = functions[then.function];
-        if (!func) {
-          console.warn(`Function ${then.function} not found. Called by rule ${rule.name}.`);
-          continue;
-        }
-
-        results = results.concat(lintNode(node, rule, then, func, resolved));
-      }
-    } catch (e) {
-      console.warn(`Encountered error when running rule '${rule.name}' on node at path '${node.path}':\n${e}`);
-    }
+    execute(
+      {
+        path: ['$'],
+        value: target,
+      },
+      results,
+      resolved,
+      rule,
+      functions,
+    );
   }
 
   return results;
